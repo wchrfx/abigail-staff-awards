@@ -104,7 +104,6 @@ declare r record; v_code text; v_alphabet text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456
         bytes bytea; j int; result jsonb := '[]'::jsonb;
 begin
   if not public.is_awards_admin() then raise exception 'Unauthorized administrator'; end if;
-  if exists(select 1 from public.ballots) then raise exception 'Cannot issue new batch after voting has begun'; end if;
   for r in select s.id,s.display_name from public.staff s
            left join public.voter_credentials c on c.staff_id=s.id
            where c.staff_id is null order by s.display_name
@@ -132,8 +131,8 @@ declare v_name text; v_code text; v_alphabet text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23
         bytes bytea; j int;
 begin
   if not public.is_awards_admin() then raise exception 'Unauthorized administrator'; end if;
-  if exists(select 1 from public.ballots) then
-    raise exception 'For ballot anonymity, codes cannot be reissued once voting has begun';
+  if exists(select 1 from public.voter_credentials where staff_id=p_staff_id and has_voted) then
+    raise exception 'This staff member has already submitted a ballot';
   end if;
   select display_name into v_name from public.staff where id=p_staff_id;
   if v_name is null then raise exception 'Staff member not found'; end if;
