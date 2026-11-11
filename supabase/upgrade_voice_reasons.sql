@@ -59,31 +59,7 @@ begin
     audio_text:=item->>'audio_base64';
     audio_mime:=item->>'audio_mime';
     if audio_text is not null then
-      if length(audio_text)>2800000 or length(audio_text)<100 or audio_text !~ '^[A-Za-z0-9+/]+={0,2}
-    if not exists(
-      select 1 from public.staff n where n.id=nominee and n.id<>s.id and
-      ((cat='overall_male' and n.gender='Male') or
-       (cat='overall_female' and n.gender='Female') or
-       (cat='technical' and n.department='Technical') or
-       (cat='nontechnical' and n.department='Non-Technical') or
-       (cat='projects' and n.department='Projects'))
-    ) then return jsonb_build_object('ok',false,'error','Nominee does not qualify for that award.'); end if;
-  end loop;
-  -- Row lock on credentials serializes concurrent attempts from the same code.
-  foreach cat in array allowed loop
-    select value into item from jsonb_array_elements(p_votes) where value->>'category'=cat;
-    audio_text:=item->>'audio_base64';
-    insert into public.ballots(category,nominee_id,reason,audio_data,audio_mime)
-    values(cat,(item->>'nominee_id')::uuid,
-      case when audio_text is not null then null else trim(item->>'reason') end,
-      case when audio_text is not null then decode(audio_text,'base64') else null end,
-      case when audio_text is not null then item->>'audio_mime' else null end);
-  end loop;
-  update public.voter_credentials set has_voted=true,failed_attempts=0,locked_until=null where staff_id=s.id;
-  return jsonb_build_object('ok',true);
-end $$;
-
-
+      if length(audio_text)>2800000 or length(audio_text)<100 or audio_text !~ '^[A-Za-z0-9+/]+={0,2}$'
          or audio_mime not in ('audio/webm','audio/mp4','audio/ogg') then
         return jsonb_build_object('ok',false,'error','Invalid or oversized voice note (maximum 2 MB).');
       end if;
@@ -112,8 +88,12 @@ end $$;
   -- Row lock on credentials serializes concurrent attempts from the same code.
   foreach cat in array allowed loop
     select value into item from jsonb_array_elements(p_votes) where value->>'category'=cat;
-    insert into public.ballots(category,nominee_id,reason)
-    values(cat,(item->>'nominee_id')::uuid,trim(item->>'reason'));
+    audio_text:=item->>'audio_base64';
+    insert into public.ballots(category,nominee_id,reason,audio_data,audio_mime)
+    values(cat,(item->>'nominee_id')::uuid,
+      case when audio_text is not null then null else trim(item->>'reason') end,
+      case when audio_text is not null then decode(audio_text,'base64') else null end,
+      case when audio_text is not null then item->>'audio_mime' else null end);
   end loop;
   update public.voter_credentials set has_voted=true,failed_attempts=0,locked_until=null where staff_id=s.id;
   return jsonb_build_object('ok',true);
