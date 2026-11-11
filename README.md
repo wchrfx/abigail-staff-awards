@@ -1,3 +1,11 @@
+## Voice-note upgrade for existing deployments (November 2026)
+
+**Run `supabase/upgrade_voice_reasons.sql` in the EXISTING awards Supabase project SQL Editor.** This is a migration: do not rerun the original schema or staff import. It adds private database audio storage and updates ballot and admin RPCs. Then redeploy the latest GitHub commit in Vercel if automatic deployment did not happen.
+
+Voters can choose a typed reason or a voice recording (up to 60 seconds, 2 MB maximum) for each award. Microphone access requires HTTPS and browser permission. Voice recordings are stored as restricted binary data in the Supabase database, not in public Storage; only the authorized admin can retrieve them after voting closes. **A person's voice may reveal their identity.** Ask participants to speak without mentioning their own names, and arrange a retention/deletion policy after awards are finalized. This is a feature upgrade requiring end-to-end testing on mobile Safari and Chrome before real voting.
+
+---
+
 # Abigail Foundation Staff Recognition Awards 2026
 
 Private-code staff voting platform. Five categories; department-based eligibility; written reasons; one completed ballot per person; anonymous ballot storage; authorized admin reporting.
