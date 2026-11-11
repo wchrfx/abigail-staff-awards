@@ -196,7 +196,7 @@ function VotingPanel() {
           {category.nominees.map(nominee => <option value={nominee.id} key={nominee.id}>{nominee.name}</option>)}
         </select>
         <label htmlFor={'reason-'+category.key}>Reason for your nomination — type or record</label>
-        {!recordings[category.key] && <textarea id={'reason-'+category.key} minLength={20} maxLength={500} rows={3} required placeholder="Describe a specific contribution or quality (at least 20 characters)…" value={answers[category.key]?.reason || ''} required={!recordings[category.key]} onChange={e => change(category.key, 'reason', e.target.value)} />}
+        {!recordings[category.key] && <textarea id={'reason-'+category.key} minLength={20} maxLength={500} rows={3} placeholder="Describe a specific contribution or quality (at least 20 characters)…" value={answers[category.key]?.reason || ''} required={!recordings[category.key]} onChange={e => change(category.key, 'reason', e.target.value)} />}
         {!recordings[category.key] && <span className="character-count">{(answers[category.key]?.reason || '').trim().length}/500 characters</span>}
         <div className="audio-reason">
           {recordings[category.key] ? <>
