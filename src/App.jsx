@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { createClient } from '@supabase/supabase-js'
 import { Award, LockKeyhole, ShieldCheck, Users, CheckCircle2, ArrowLeft, Download, LogOut, CalendarDays, KeyRound, Vote, RefreshCw } from 'lucide-react'
 
@@ -38,6 +38,73 @@ function VotingPanel() {
   const [done, setDone] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [recordings, setRecordings] = useState({})
+  const [recordingCategory, setRecordingCategory] = useState(null)
+  const recorderRef = useRef(null)
+  const chunksRef = useRef([])
+  const timeoutRef = useRef(null)
+  const streamRef = useRef(null)
+
+  function cleanupRecording() {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current)
+    streamRef.current?.getTracks().forEach(track => track.stop())
+    timeoutRef.current = null
+    streamRef.current = null
+    recorderRef.current = null
+    setRecordingCategory(null)
+  }
+  useEffect(() => () => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current)
+    streamRef.current?.getTracks().forEach(track => track.stop())
+    if (recorderRef.current?.state === 'recording') recorderRef.current.stop()
+  }, [])
+
+  async function startRecording(category) {
+    setError('')
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+      setError('This browser does not support voice recording. Please use a recent Chrome or Safari browser, or type your reason.')
+      return
+    }
+    const mime = ['audio/webm;codecs=opus','audio/mp4','audio/webm','audio/ogg'].find(m => MediaRecorder.isTypeSupported(m))
+    if (!mime) { setError('Voice recording format is not supported on this device. Please type your reason.'); return }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({audio:true})
+      streamRef.current = stream
+      chunksRef.current = []
+      const recorder = new MediaRecorder(stream,{mimeType:mime,audioBitsPerSecond:24000})
+      recorderRef.current = recorder
+      recorder.ondataavailable = event => { if (event.data.size) chunksRef.current.push(event.data) }
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current,{type:recorder.mimeType.split(';')[0]})
+        cleanupRecording()
+        if (blob.size > 2097152) { setError('Voice note is too large. Record a shorter message.'); return }
+        if (blob.size < 64) { setError('Recording was too short. Please try again.'); return }
+        setRecordings(prev => ({...prev,[category]:{blob,url:URL.createObjectURL(blob),mime:blob.type}}))
+        change(category,'reason','')
+      }
+      recorder.onerror = () => {cleanupRecording();setError('Recording failed. Please try again.')}
+      recorder.start()
+      setRecordingCategory(category)
+      timeoutRef.current = setTimeout(() => { if (recorder.state === 'recording') recorder.stop() },60000)
+    } catch {cleanupRecording();setError('Microphone permission was denied or unavailable. You can type your reason instead.')}
+  }
+  function stopRecording() { if (recorderRef.current?.state === 'recording') recorderRef.current.stop() }
+  function clearRecording(category) {
+    setRecordings(prev => {
+      const next = {...prev}
+      if (next[category]?.url) URL.revokeObjectURL(next[category].url)
+      delete next[category]
+      return next
+    })
+  }
+  function blobToBase64(blob) {
+    return new Promise((resolve,reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result).split(',')[1])
+      reader.onerror = reject
+      reader.readAsDataURL(blob)
+    })
+  }
 
   async function enter(event) {
     event.preventDefault()
@@ -62,21 +129,29 @@ function VotingPanel() {
     const choices = ballot.categories.map(category => ({
       category: category.key,
       nominee_id: answers[category.key]?.nominee_id,
-      reason: (answers[category.key]?.reason || '').trim()
+      reason: recordings[category.key] ? '' : (answers[category.key]?.reason || '').trim()
     }))
-    if (choices.some(choice => !choice.nominee_id || choice.reason.length < 20 || choice.reason.length > 500)) {
-      setError('Select a nominee and write a reason of 20–500 characters for every award.')
+    if (choices.some(choice => !choice.nominee_id || (!recordings[choice.category] && (choice.reason.length < 20 || choice.reason.length > 500)))) {
+      setError('Select a nominee and either type 20–500 characters or record a voice note for every award.')
       return
     }
-    if (!window.confirm('Submit your final confidential votes? You cannot edit them afterward.')) return
+    if (recordingCategory) {setError('Stop recording before submitting.');return}
+    if (!window.confirm('Submit your final votes? Voice recordings may identify you to the administrator. You cannot edit after submission.')) return
     setBusy(true); setError('')
     try {
+      for (const choice of choices) {
+        if (recordings[choice.category]) {
+          choice.audio_base64 = await blobToBase64(recordings[choice.category].blob)
+          choice.audio_mime = recordings[choice.category].mime
+        }
+      }
       const { data, error: problem } = await voterClient.rpc('submit_awards_ballot', {
         p_name: name.trim(), p_code: code.trim().toUpperCase(), p_votes: choices
       })
       if (problem) throw problem
       if (!data?.ok) throw new Error(data?.error || 'Unable to submit your ballot.')
-      setDone(true); setBallot(null); setCode(''); setAnswers({})
+      Object.values(recordings).forEach(r => URL.revokeObjectURL(r.url))
+      setRecordings({}); setDone(true); setBallot(null); setCode(''); setAnswers({})
     } catch (problem) { setError(problem.message) }
     finally { setBusy(false) }
   }
@@ -120,11 +195,21 @@ function VotingPanel() {
           <option value="">Select a staff member</option>
           {category.nominees.map(nominee => <option value={nominee.id} key={nominee.id}>{nominee.name}</option>)}
         </select>
-        <label htmlFor={'reason-'+category.key}>Reason for your nomination</label>
-        <textarea id={'reason-'+category.key} minLength={20} maxLength={500} rows={3} required placeholder="Describe a specific contribution or quality (at least 20 characters)…" value={answers[category.key]?.reason || ''} onChange={e => change(category.key, 'reason', e.target.value)} />
-        <span className="character-count">{(answers[category.key]?.reason || '').trim().length}/500 characters</span>
+        <label htmlFor={'reason-'+category.key}>Reason for your nomination — type or record</label>
+        {!recordings[category.key] && <textarea id={'reason-'+category.key} minLength={20} maxLength={500} rows={3} required placeholder="Describe a specific contribution or quality (at least 20 characters)…" value={answers[category.key]?.reason || ''} required={!recordings[category.key]} onChange={e => change(category.key, 'reason', e.target.value)} />}
+        {!recordings[category.key] && <span className="character-count">{(answers[category.key]?.reason || '').trim().length}/500 characters</span>}
+        <div className="audio-reason">
+          {recordings[category.key] ? <>
+            <audio controls src={recordings[category.key].url} aria-label={'Voice reason for '+category.title}/>
+            <button type="button" className="button secondary small" onClick={()=>clearRecording(category.key)}>Delete and re-record</button>
+          </> : recordingCategory===category.key ? <>
+            <span className="recording-indicator">● Recording (up to 60 seconds)…</span>
+            <button type="button" className="button primary small" onClick={stopRecording}>Stop and save recording</button>
+          </> : <button type="button" className="button secondary small" disabled={recordingCategory!==null} onClick={()=>startRecording(category)}>🎙 Record a voice reason instead</button>}
+          <span className="audio-help">Voice notes may reveal your identity. Only the authorized administrator can listen after voting closes.</span>
+        </div>
       </div>)}
-      <div className="privacy"><ShieldCheck size={18}/> Once submitted, votes are final. No voter identity is attached to stored nomination reasons.</div>
+      <div className="privacy"><ShieldCheck size={18}/> Once submitted, votes are final. Typed reasons are not linked to voter names; voices may still identify speakers.</div>
       <button type="submit" className="button primary full" disabled={busy}>{busy ? 'Submitting confidential votes…' : 'Submit my final ballot'}</button>
     </form>
   </section>
@@ -153,6 +238,7 @@ function AdminPanel() {
   const [closesAt, setClosesAt] = useState('')
   const [codes, setCodes] = useState(null)
   const [results, setResults] = useState(null)
+  const [audioUrls, setAudioUrls] = useState({})
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -208,7 +294,8 @@ function AdminPanel() {
 
   async function signOut() {
     await adminClient.auth.signOut()
-    setCodes(null); setResults(null); setAuthorized(false); setNotice(''); setError('')
+    Object.values(audioUrls).forEach(url => URL.revokeObjectURL(url))
+    setAudioUrls({}); setCodes(null); setResults(null); setAuthorized(false); setNotice(''); setError('')
   }
 
   async function setWindow(event) {
@@ -243,6 +330,19 @@ function AdminPanel() {
       await refresh()
       setNotice('Replacement generated. Share it privately and save it now.')
     } catch (problem) {setError(problem.message)}
+    finally {setBusy(false)}
+  }
+
+  async function loadAudio(ballotId) {
+    setBusy(true); setError('')
+    try {
+      const data = await call('admin_get_voice_reason',{p_ballot_id:ballotId})
+      const binary = atob(data.base64)
+      const bytes = new Uint8Array(binary.length)
+      for (let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i)
+      const blob = new Blob([bytes],{type:data.mime})
+      setAudioUrls(prev=>({...prev,[ballotId]:URL.createObjectURL(blob)}))
+    } catch(problem) {setError(problem.message)}
     finally {setBusy(false)}
   }
 
@@ -331,7 +431,9 @@ function AdminPanel() {
           const matches=results.filter(r=>r.category===category)
           return <div className="result-category" key={category}><h4>{label}</h4>
             {!matches.length ? <p>No votes recorded.</p> : matches.map((r,i)=><details key={r.nominee+'-'+i}><summary>{r.nominee} <strong>{r.votes} vote{Number(r.votes)===1?'':'s'}</strong></summary>
-              <div className="reasons"><b>Anonymous reasons</b>{r.reasons.map((reason,j)=><p key={j}>“{reason}”</p>)}</div>
+              <div className="reasons"><b>Nomination reasons (voices may identify speakers)</b>{r.reasons.map((reason,j)=><div key={reason.id || j} className="reason-item">
+                {reason.is_audio ? (audioUrls[reason.id] ? <audio controls src={audioUrls[reason.id]}/> : <button className="button secondary small" disabled={busy} onClick={()=>loadAudio(reason.id)}>Listen to private voice reason</button>) : <p>“{reason.text}”</p>}
+              </div>)}</div>
             </details>)}
           </div>
         })}
